@@ -36,7 +36,7 @@ export class ItemController {
 
   // --- ROUTE SPÉCIFIQUE MÉTIER ---
   @Post(':id/decrement')
-  decrementStock(@Param('id') id: string, @Body('amount') amount: number) {
-    return this.itemService.decrementStock(+id, amount);
+  decrement(@Param('id') id: string, @Body('amount') amount: number) {
+    return this.itemService.decrement(+id, amount);
   }
 }

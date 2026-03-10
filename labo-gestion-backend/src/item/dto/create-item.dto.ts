@@ -1,4 +1,11 @@
-import { IsString, IsInt, IsBoolean, IsOptional, Min } from 'class-validator';
+import {
+  IsString,
+  IsInt,
+  IsBoolean,
+  IsOptional,
+  Min,
+  IsNumber,
+} from 'class-validator';
 
 export class CreateItemDto {
   @IsString()
@@ -10,6 +17,10 @@ export class CreateItemDto {
 
   @IsString()
   readonly supplierRef: string;
+
+  @IsNumber()
+  @IsOptional()
+  readonly price?: number;
 
   @IsInt()
   @Min(0)

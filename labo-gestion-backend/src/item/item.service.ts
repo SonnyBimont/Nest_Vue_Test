@@ -45,6 +45,17 @@ export class ItemService {
   }
 
   // --- LOGIQUE MÉTIER LABO STOCK ALERT ---
+  async decrement(id: number, amount: number): Promise<Item> {
+    const item = await this.findOne(id);
+    if (item.quantity < amount) {
+      throw new Error('Stock insuffisant');
+    }
+
+    item.quantity -= amount;
+    await item.save();
+    return item;
+  }
+
   async decrementStock(id: number, amount: number): Promise<Item> {
     const item = await this.findOne(id);
     item.quantity -= amount;

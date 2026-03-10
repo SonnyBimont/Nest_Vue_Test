@@ -39,4 +39,8 @@ cd labo-gestion-frontend
 npm install
 npm run dev
 \`\`\`
+<<<<<<< HEAD
 L'interface est accessible sur l'URL locale fournie par Vite (généralement `http://localhost:5173`).
+=======
+L'interface est accessible sur l'URL locale fournie par Vite (généralement `http://localhost:5173`).
+>>>>>>> 3c1aedb9bb543a26351c755e9257ad9da27a98b6
