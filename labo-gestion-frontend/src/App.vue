@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import axios from 'axios'
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import Login from './components/Login.vue'
 import { apiClient } from './services/api'
 
@@ -53,12 +53,16 @@ const inventoryFilter = ref<'all' | 'low' | 'restock' | 'ok'>('all')
 const inventorySortKey = ref<InventorySortKey>('name')
 const inventorySortDirection = ref<'asc' | 'desc'>('asc')
 const supplierSearch = ref('')
+const supplierFormSection = ref<HTMLElement | null>(null)
+const itemFormSection = ref<HTMLElement | null>(null)
+const highlightedSection = ref<'supplier' | 'item' | null>(null)
 const supplierForm = ref({
   name: '',
   contact: '',
   email: '',
 })
 const editingSupplierId = ref<number | null>(null)
+let sectionHighlightTimeout: ReturnType<typeof setTimeout> | null = null
 
 const createEmptyFormItem = (): Item => ({
   name: '',
@@ -229,6 +233,22 @@ const getRestockGap = (item: Item) => {
   return Math.max(item.stockMax - item.quantity, 0)
 }
 
+const getReportItemThreshold = (reportItem: RestockReportItem) => {
+  const sourceItem = items.value.find((item) => item.id === reportItem.id)
+  return sourceItem ? getItemThreshold(sourceItem) : 5
+}
+
+const getReportItemTotalPrice = (reportItem: RestockReportItem) => {
+  const sourceItem = items.value.find((item) => item.id === reportItem.id)
+  const unitPrice = sourceItem?.price
+
+  if (unitPrice === null || unitPrice === undefined) {
+    return null
+  }
+
+  return unitPrice * reportItem.quantityToRestock
+}
+
 const formatCurrency = (value?: number | null) => {
   if (value === null || value === undefined) {
     return '-'
@@ -252,21 +272,6 @@ const getSupplierForReportItem = (reportItem: RestockReportItem) => {
   const item = items.value.find((inventoryItem) => inventoryItem.id === reportItem.id)
   return getSupplierById(item?.supplierId)
 }
-
-const getReportItemSupplierKey = (reportItem: RestockReportItem) => {
-  const supplier = getSupplierForReportItem(reportItem)
-
-  if (supplier) {
-    return `supplier:${supplier.id}`
-  }
-
-  return `supplier-name:${reportItem.supplierName ?? 'inconnu'}`
-}
-
-const shouldShowGroupedRestockAction = (reportItem: RestockReportItem, index: number) =>
-  itemsToRestock.value.findIndex(
-    (candidate) => getReportItemSupplierKey(candidate) === getReportItemSupplierKey(reportItem),
-  ) === index
 
 const buildRestockMailto = (
   supplier: Supplier,
@@ -350,19 +355,31 @@ const openMailDraft = (mailtoUrl: string | null, fallbackMessage: string) => {
   window.location.href = mailtoUrl
 }
 
+const scrollToSection = async (
+  sectionRef: typeof supplierFormSection,
+  sectionName: 'supplier' | 'item',
+) => {
+  await nextTick()
+  sectionRef.value?.scrollIntoView({
+    behavior: 'smooth',
+    block: 'start',
+  })
+
+  highlightedSection.value = sectionName
+
+  if (sectionHighlightTimeout) {
+    clearTimeout(sectionHighlightTimeout)
+  }
+
+  sectionHighlightTimeout = setTimeout(() => {
+    highlightedSection.value = null
+  }, 1800)
+}
+
 const sendSingleRestockRequest = (reportItem: RestockReportItem) => {
   openMailDraft(
     buildSingleItemRestockMailto(reportItem),
     `Impossible de préparer le mail pour ${reportItem.name} : fournisseur ou email introuvable.`,
-  )
-}
-
-const sendGroupedRestockRequest = (reportItem: RestockReportItem) => {
-  const supplier = getSupplierForReportItem(reportItem)
-
-  openMailDraft(
-    supplier ? buildSupplierRestockMailto(supplier) : null,
-    `Impossible de préparer le mail groupé pour ${reportItem.supplierName || 'ce fournisseur'}.`,
   )
 }
 
@@ -378,9 +395,10 @@ const exportRestockCsv = () => {
     'Fournisseur',
     'Ref fournisseur',
     'Stock actuel',
+    'Stock mini',
     'Stock max',
     'Quantite a reapprovisionner',
-    'Taux de couverture (%)',
+    'Prix total',
   ]
 
   const rows = itemsToRestock.value.map((item) => [
@@ -389,9 +407,10 @@ const exportRestockCsv = () => {
     item.supplierName ?? '',
     item.supplierRef ?? '',
     String(item.quantity),
+    String(getReportItemThreshold(item)),
     String(item.stockMax ?? ''),
     String(item.quantityToRestock),
-    String(item.fillRate ?? ''),
+    String(getReportItemTotalPrice(item) ?? ''),
   ])
 
   const csvContent = [header, ...rows]
@@ -469,7 +488,7 @@ const editSupplier = (supplier: Supplier) => {
     email: supplier.email,
   }
 
-  window.scrollTo({ top: 0, behavior: 'smooth' })
+  void scrollToSection(supplierFormSection, 'supplier')
 }
 
 const cancelSupplierEdit = () => {
@@ -611,7 +630,7 @@ const editItem = (item: Item) => {
     supplierId: item.supplierId ?? null,
   }
 
-  window.scrollTo({ top: 0, behavior: 'smooth' })
+  void scrollToSection(itemFormSection, 'item')
 }
 
 const cancelEdit = () => {
@@ -621,6 +640,12 @@ const cancelEdit = () => {
 
 onMounted(() => {
   checkAuth()
+})
+
+onUnmounted(() => {
+  if (sectionHighlightTimeout) {
+    clearTimeout(sectionHighlightTimeout)
+  }
 })
 </script>
 
@@ -633,7 +658,7 @@ onMounted(() => {
     <section class="hero-panel">
       <div>
         <p class="eyebrow">Pilotage du stock labo</p>
-        <h1>Suivi des niveaux et préparation du réapprovisionnement</h1>
+        <h1>Suivi Stock et réapprovisionnement</h1>
         <p class="hero-copy">
           Comparez le stock actuel au stock cible pour transmettre au magasin central les quantités à
           réapprovisionner par article.
@@ -689,76 +714,6 @@ onMounted(() => {
         <strong>{{ averageFillRate !== null ? `${averageFillRate}%` : 'N/A' }}</strong>
       </article>
     </section> -->
-
-    <section class="panel">
-      <div class="panel-heading report-heading">
-        <div>
-          <p class="section-kicker">Réapprovisionnement</p>
-          <h2>Préparation pour le magasin central</h2>
-        </div>
-
-        <button @click="exportRestockCsv" class="btn btn-primary" :disabled="itemsToRestock.length === 0">
-          Export CSV
-        </button>
-      </div>
-
-      <div v-if="itemsToRestock.length > 0" class="table-wrapper">
-        <table>
-          <thead>
-            <tr>
-              <th>Article</th>
-              <th>Réf. interne</th>
-              <th>Fournisseur</th>
-              <th>Stock actuel</th>
-              <th>Stock max</th>
-              <th>À réapprovisionner</th>
-              <th>Couverture</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="(item, index) in itemsToRestock" :key="item.id">
-              <td>{{ item.name }}</td>
-              <td>{{ item.internalRef || '-' }}</td>
-              <td>{{ item.supplierName || '-' }}</td>
-              <td>{{ item.quantity }}</td>
-              <td>{{ item.stockMax ?? '-' }}</td>
-              <td class="restock-gap">{{ item.quantityToRestock }}</td>
-              <td>
-                <div class="coverage-cell">
-                  <div class="coverage-bar">
-                    <span :style="{ width: `${item.fillRate ?? 0}%` }"></span>
-                  </div>
-                  <span>{{ item.fillRate !== null ? `${item.fillRate}%` : 'N/A' }}</span>
-                </div>
-              </td>
-              <td>
-                <div class="restock-actions">
-                  <button
-                    type="button"
-                    class="btn btn-info btn-sm"
-                    @click="sendSingleRestockRequest(item)"
-                  >
-                    Envoyer cet article
-                  </button>
-                  <!-- <button
-                    v-if="shouldShowGroupedRestockAction(item, index)"
-                    type="button"
-                    class="btn btn-secondary btn-sm"
-                    @click="sendGroupedRestockRequest(item)"
-                  >
-                    Envoyer tout le fournisseur
-                  </button> -->
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <p v-else class="empty-state">
-        Tous les articles avec un stock max défini sont au niveau attendu. Aucun réapprovisionnement à transmettre.
-      </p>
-    </section>
 
     <section class="panel">
       <div class="panel-heading">
@@ -878,6 +833,68 @@ onMounted(() => {
     </section>
 
     <section class="panel">
+      <div class="panel-heading report-heading">
+        <div>
+          <p class="section-kicker">Réapprovisionnement</p>
+          <h2>Préparation pour le magasin central</h2>
+        </div>
+
+        <button @click="exportRestockCsv" class="btn btn-primary" :disabled="itemsToRestock.length === 0">
+          Export CSV
+        </button>
+      </div>
+
+      <div v-if="itemsToRestock.length > 0" class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Article</th>
+              <th>Réf. interne</th>
+              <th>Fournisseur</th>
+              <th>Réf. fournisseur</th>
+              <th>Stock actuel</th>
+              <th>Stock mini</th>
+              <th>Stock max</th>
+              <th>À réapprovisionner</th>
+              <th>Prix total</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in itemsToRestock" :key="item.id">
+              <td>{{ item.name }}</td>
+              <td>{{ item.internalRef || '-' }}</td>
+              <td>{{ item.supplierName || '-' }}</td>
+              <td>{{ item.supplierRef || '-' }}</td>
+              <td>{{ item.quantity }}</td>
+              <td>{{ getReportItemThreshold(item) }}</td>
+              <td>{{ item.stockMax ?? '-' }}</td>
+              <td class="restock-gap">{{ item.quantityToRestock }}</td>
+              <td>{{ formatCurrency(getReportItemTotalPrice(item)) }}</td>
+              <td>
+                <div class="restock-actions">
+                  <button
+                    type="button"
+                    class="btn btn-info btn-sm"
+                    @click="sendSingleRestockRequest(item)"
+                  >
+                    Envoyer cet article
+                  </button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p v-else class="empty-state">
+        Tous les articles avec un stock max défini sont au niveau attendu. Aucun réapprovisionnement à transmettre.
+      </p>
+    </section>
+
+    <section
+      ref="itemFormSection"
+      :class="['panel', { 'panel-highlighted': highlightedSection === 'item' }]"
+    >
       <div class="panel-heading">
         <div>
           <p class="section-kicker">Paramétrage article</p>
@@ -952,7 +969,10 @@ onMounted(() => {
       </form>
     </section>
 
-    <section class="panel">
+    <section
+      ref="supplierFormSection"
+      :class="['panel', { 'panel-highlighted': highlightedSection === 'supplier' }]"
+    >
       <div class="panel-heading">
         <div>
           <p class="section-kicker">Fournisseurs</p>
@@ -1166,6 +1186,36 @@ h2 {
 .panel {
   padding: 24px;
   border-radius: 28px;
+}
+
+.panel-highlighted {
+  border-color: rgba(201, 103, 43, 0.42);
+  box-shadow:
+    0 0 0 5px rgba(201, 103, 43, 0.14),
+    0 18px 50px rgba(40, 71, 103, 0.08);
+  animation: panel-pulse 1.6s ease-out;
+}
+
+@keyframes panel-pulse {
+  0% {
+    transform: translateY(-2px);
+    box-shadow:
+      0 0 0 0 rgba(201, 103, 43, 0.28),
+      0 18px 50px rgba(40, 71, 103, 0.08);
+  }
+
+  45% {
+    transform: translateY(0);
+    box-shadow:
+      0 0 0 8px rgba(201, 103, 43, 0.1),
+      0 18px 50px rgba(40, 71, 103, 0.08);
+  }
+
+  100% {
+    box-shadow:
+      0 0 0 5px rgba(201, 103, 43, 0.14),
+      0 18px 50px rgba(40, 71, 103, 0.08);
+  }
 }
 
 .stock-alert-panel {
