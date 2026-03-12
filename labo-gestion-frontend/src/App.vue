@@ -38,12 +38,30 @@ interface RestockReportItem {
   isLowStock: boolean
 }
 
+interface StockMovement {
+  id: number
+  movementType: 'usage'
+  itemId: number | null
+  itemName: string
+  itemInternalRef: string | null
+  supplierId: number | null
+  supplierName: string | null
+  supplierRef: string | null
+  quantity: number
+  quantityBefore: number
+  quantityAfter: number
+  note: string | null
+  createdAt: string
+}
+
 type InventorySortKey = 'name' | 'quantity' | 'stockMax' | 'supplier' | 'gap'
+type HighlightedSection = 'supplier' | 'item' | 'history'
 
 const isAuthenticated = ref(false)
 const items = ref<Item[]>([])
 const suppliers = ref<Supplier[]>([])
 const restockReport = ref<RestockReportItem[]>([])
+const stockMovements = ref<StockMovement[]>([])
 const error = ref<string | null>(null)
 const successMessage = ref<string | null>(null)
 const editingId = ref<number | null>(null)
@@ -55,7 +73,15 @@ const inventorySortDirection = ref<'asc' | 'desc'>('asc')
 const supplierSearch = ref('')
 const supplierFormSection = ref<HTMLElement | null>(null)
 const itemFormSection = ref<HTMLElement | null>(null)
-const highlightedSection = ref<'supplier' | 'item' | null>(null)
+const historySection = ref<HTMLElement | null>(null)
+const highlightedSection = ref<HighlightedSection | null>(null)
+const historyLoading = ref(false)
+const historyFilters = ref({
+  itemId: 'all',
+  supplierId: 'all',
+  from: '',
+  to: '',
+})
 const supplierForm = ref({
   name: '',
   contact: '',
@@ -110,6 +136,24 @@ const filteredSuppliers = computed(() => {
 
 const itemsToRestock = computed(() =>
   restockReport.value.filter((item) => item.quantityToRestock > 0),
+)
+
+const selectedHistoryItem = computed(() => {
+  if (historyFilters.value.itemId === 'all') {
+    return null
+  }
+
+  return items.value.find((item) => String(item.id) === historyFilters.value.itemId) ?? null
+})
+
+const historyTitle = computed(() =>
+  selectedHistoryItem.value
+    ? `Historique de ${selectedHistoryItem.value.name}`
+    : 'Historique global des utilisations',
+)
+
+const historyTotalQuantity = computed(() =>
+  stockMovements.value.reduce((total, movement) => total + movement.quantity, 0),
 )
 
 const getItemThreshold = (item: Item) => item.lowStockThreshold ?? 5
@@ -268,6 +312,20 @@ const formatCurrency = (value?: number | null) => {
   }).format(value)
 }
 
+const formatDateTime = (value: string) =>
+  new Intl.DateTimeFormat('fr-FR', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  }).format(new Date(value))
+
+const getMovementTypeLabel = (movementType: StockMovement['movementType']) => {
+  if (movementType === 'usage') {
+    return 'Utilisation'
+  }
+
+  return movementType
+}
+
 const getSupplierById = (supplierId?: number | null) => {
   if (!supplierId) {
     return null
@@ -364,8 +422,8 @@ const openMailDraft = (mailtoUrl: string | null, fallbackMessage: string) => {
 }
 
 const scrollToSection = async (
-  sectionRef: typeof supplierFormSection,
-  sectionName: 'supplier' | 'item',
+  sectionRef: typeof supplierFormSection | typeof itemFormSection | typeof historySection,
+  sectionName: HighlightedSection,
 ) => {
   await nextTick()
   sectionRef.value?.scrollIntoView({
@@ -382,6 +440,73 @@ const scrollToSection = async (
   sectionHighlightTimeout = setTimeout(() => {
     highlightedSection.value = null
   }, 1800)
+}
+
+const buildHistoryQueryParams = () => {
+  const params: Record<string, number | string> = {}
+
+  if (historyFilters.value.itemId !== 'all') {
+    params.itemId = Number(historyFilters.value.itemId)
+  }
+
+  if (historyFilters.value.supplierId !== 'all') {
+    params.supplierId = Number(historyFilters.value.supplierId)
+  }
+
+  if (historyFilters.value.from) {
+    params.from = historyFilters.value.from
+  }
+
+  if (historyFilters.value.to) {
+    params.to = historyFilters.value.to
+  }
+
+  return params
+}
+
+const fetchStockMovements = async () => {
+  historyLoading.value = true
+
+  try {
+    const response = await apiClient.get<StockMovement[]>('/stock-movements', {
+      params: buildHistoryQueryParams(),
+    })
+    stockMovements.value = response.data
+  } catch (err) {
+    error.value = getErrorMessage(err, "Erreur lors du chargement de l'historique des mouvements.")
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+const applyHistoryFilters = async () => {
+  await fetchStockMovements()
+}
+
+const resetHistoryFilters = async () => {
+  historyFilters.value = {
+    itemId: 'all',
+    supplierId: 'all',
+    from: '',
+    to: '',
+  }
+
+  await fetchStockMovements()
+}
+
+const openItemHistory = async (item: Item) => {
+  if (!item.id) {
+    return
+  }
+
+  historyFilters.value = {
+    ...historyFilters.value,
+    itemId: String(item.id),
+    supplierId: 'all',
+  }
+
+  await fetchStockMovements()
+  await scrollToSection(historySection, 'history')
 }
 
 const sendSingleRestockRequest = (reportItem: RestockReportItem) => {
@@ -430,6 +555,51 @@ const exportRestockCsv = () => {
   const link = document.createElement('a')
   link.href = url
   link.download = `reapprovisionnement-labo-${new Date().toISOString().slice(0, 10)}.csv`
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+const exportHistoryCsv = () => {
+  if (stockMovements.value.length === 0) {
+    error.value = 'Aucun mouvement à exporter pour la période sélectionnée.'
+    return
+  }
+
+  const header = [
+    'Date',
+    'Type',
+    'Article',
+    'Ref interne',
+    'Fournisseur',
+    'Ref fournisseur',
+    'Quantite mouvement',
+    'Stock avant',
+    'Stock apres',
+    'Note',
+  ]
+
+  const rows = stockMovements.value.map((movement) => [
+    formatDateTime(movement.createdAt),
+    getMovementTypeLabel(movement.movementType),
+    movement.itemName,
+    movement.itemInternalRef ?? '',
+    movement.supplierName ?? '',
+    movement.supplierRef ?? '',
+    String(movement.quantity),
+    String(movement.quantityBefore),
+    String(movement.quantityAfter),
+    movement.note ?? '',
+  ])
+
+  const csvContent = [header, ...rows]
+    .map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(';'))
+    .join('\n')
+
+  const file = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(file)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `historique-stock-${new Date().toISOString().slice(0, 10)}.csv`
   link.click()
   URL.revokeObjectURL(url)
 }
@@ -543,7 +713,7 @@ const fetchRestockReport = async () => {
 }
 
 const refreshInventoryData = async () => {
-  await Promise.all([fetchItems(), fetchRestockReport()])
+  await Promise.all([fetchItems(), fetchRestockReport(), fetchStockMovements()])
 }
 
 const checkAuth = async () => {
@@ -564,8 +734,15 @@ const logout = () => {
   items.value = []
   suppliers.value = []
   restockReport.value = []
+  stockMovements.value = []
   editingId.value = null
   editingSupplierId.value = null
+  historyFilters.value = {
+    itemId: 'all',
+    supplierId: 'all',
+    from: '',
+    to: '',
+  }
   formItem.value = createEmptyFormItem()
   cancelSupplierEdit()
 }
@@ -726,8 +903,8 @@ onUnmounted(() => {
     <section class="panel">
       <div class="panel-heading">
         <div>
-          <p class="section-kicker">Inventaire détaillé</p>
-          <h2>Vue opérationnelle</h2>
+          <p class="section-kicker">Inventaire Labo</p>
+          <h2>Stock Labo </h2>
         </div>
       </div>
 
@@ -773,6 +950,9 @@ onUnmounted(() => {
 
       <p class="inventory-result-count">
         {{ filteredInventoryItems.length }} article(s) affiché(s) sur {{ items.length }}.
+      </p>
+      <p v-if="filteredInventoryItems.length > 12" class="subtle-note">
+        Les 12 premières lignes restent visibles. Faites défiler le tableau pour consulter le reste.
       </p>
 
       <div v-if="filteredInventoryItems.length > 0" class="table-wrapper inventory-table-wrapper">
@@ -829,6 +1009,7 @@ onUnmounted(() => {
                   </button>
                 </div>
                 <div class="manage-actions">
+                  <button @click="openItemHistory(item)" class="btn btn-secondary btn-sm">Historique</button>
                   <button @click="editItem(item)" class="btn btn-info btn-sm">Éditer</button>
                   <button @click="deleteItem(item.id!)" class="btn btn-danger btn-sm">Supprimer</button>
                 </div>
@@ -838,6 +1019,107 @@ onUnmounted(() => {
         </table>
       </div>
       <p v-else class="empty-state">Aucun article ne correspond aux critères de recherche ou de filtre.</p>
+    </section>
+
+    <section
+      ref="historySection"
+      :class="['panel', { 'panel-highlighted': highlightedSection === 'history' }]"
+    >
+      <div class="panel-heading report-heading">
+        <div>
+          <p class="section-kicker">Traçabilité</p>
+          <h2>{{ historyTitle }}</h2>
+        </div>
+
+        <button @click="exportHistoryCsv" class="btn btn-primary" :disabled="stockMovements.length === 0">
+          Export CSV
+        </button>
+      </div>
+
+      <div class="history-toolbar">
+        <div class="form-group">
+          <label for="historyItemFilter">Article</label>
+          <select id="historyItemFilter" v-model="historyFilters.itemId">
+            <option value="all">Tous les articles</option>
+            <option v-for="item in items" :key="item.id" :value="String(item.id)">
+              {{ item.name }}
+            </option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="historySupplierFilter">Fournisseur</label>
+          <select id="historySupplierFilter" v-model="historyFilters.supplierId">
+            <option value="all">Tous les fournisseurs</option>
+            <option v-for="supplier in suppliers" :key="supplier.id" :value="String(supplier.id)">
+              {{ supplier.name }}
+            </option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="historyFrom">Du</label>
+          <input id="historyFrom" v-model="historyFilters.from" type="date" />
+        </div>
+
+        <div class="form-group">
+          <label for="historyTo">Au</label>
+          <input id="historyTo" v-model="historyFilters.to" type="date" />
+        </div>
+
+        <div class="history-toolbar-actions">
+          <button type="button" class="btn btn-info" @click="applyHistoryFilters">
+            Filtrer
+          </button>
+          <button type="button" class="btn btn-secondary" @click="resetHistoryFilters">
+            Réinitialiser
+          </button>
+        </div>
+      </div>
+
+      <p class="inventory-result-count">
+        {{ stockMovements.length }} mouvement(s) affiché(s), {{ historyTotalQuantity }} unité(s) tracée(s).
+      </p>
+      <p v-if="stockMovements.length > 5" class="subtle-note">
+        Seuls les 5 derniers résultats sont visibles immédiatement. Faites défiler le tableau pour consulter le reste.
+      </p>
+
+      <div v-if="historyLoading" class="empty-state">Chargement de l'historique...</div>
+      <div v-else-if="stockMovements.length > 0" class="table-wrapper history-table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Type</th>
+              <th>Article</th>
+              <th>Réf. interne</th>
+              <th>Fournisseur</th>
+              <th>Réf. fournisseur</th>
+              <th>Qté mouvement</th>
+              <th>Stock avant</th>
+              <th>Stock après</th>
+              <!-- <th>Note</th> -->
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="movement in stockMovements" :key="movement.id">
+              <td>{{ formatDateTime(movement.createdAt) }}</td>
+              <td>{{ getMovementTypeLabel(movement.movementType) }}</td>
+              <td>{{ movement.itemName }}</td>
+              <td>{{ movement.itemInternalRef || '-' }}</td>
+              <td>{{ movement.supplierName || '-' }}</td>
+              <td>{{ movement.supplierRef || '-' }}</td>
+              <td class="restock-gap">{{ movement.quantity }}</td>
+              <td>{{ movement.quantityBefore }}</td>
+              <td>{{ movement.quantityAfter }}</td>
+              <!-- <td>{{ movement.note || '-' }}</td> -->
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p v-else class="empty-state">
+        Aucun mouvement ne correspond aux filtres sélectionnés.
+      </p>
     </section>
 
     <section class="panel">
@@ -852,7 +1134,11 @@ onUnmounted(() => {
         </button>
       </div>
 
-      <div v-if="itemsToRestock.length > 0" class="table-wrapper">
+      <p v-if="itemsToRestock.length > 8" class="subtle-note">
+        Les 8 premières lignes restent visibles. Faites défiler le tableau pour consulter le reste.
+      </p>
+
+      <div v-if="itemsToRestock.length > 0" class="table-wrapper restock-table-wrapper">
         <table>
           <thead>
             <tr>
@@ -984,7 +1270,7 @@ onUnmounted(() => {
       <div class="panel-heading">
         <div>
           <p class="section-kicker">Fournisseurs</p>
-          <h2>Créer et consulter les fournisseurs référencés</h2>
+          <h2>Créer et consulter les fournisseurs </h2>
         </div>
       </div>
 
@@ -1045,33 +1331,39 @@ onUnmounted(() => {
               <span>Actions</span>
             </div>
 
-            <article v-for="supplier in filteredSuppliers" :key="supplier.id" class="supplier-list-row supplier-list-item">
-              <strong>{{ supplier.name }}</strong>
-              <span>{{ supplier.contact }}</span>
-              <a
-                :href="buildSupplierRestockMailto(supplier)"
-                :title="`Envoyer une demande de réapprovisionnement à ${supplier.contact}`"
-              >
-                {{ supplier.email }}
-              </a>
-              <span class="supplier-usage">
-                {{ getSupplierItemCount(supplier.id) }} article(s)
-              </span>
-              <div class="supplier-actions">
-                <button type="button" class="btn btn-info btn-sm" @click="editSupplier(supplier)">
-                  Éditer
-                </button>
-                <button
-                  type="button"
-                  class="btn btn-danger btn-sm"
-                  @click="deleteSupplier(supplier)"
-                  :disabled="isSupplierUsed(supplier.id)"
-                  :title="isSupplierUsed(supplier.id) ? 'Suppression bloquée : fournisseur utilisé par des articles.' : 'Supprimer ce fournisseur'"
+            <p v-if="filteredSuppliers.length > 5" class="subtle-note">
+              Les 5 premières lignes restent visibles. Faites défiler la liste pour consulter le reste.
+            </p>
+
+            <div class="supplier-list-scroll">
+              <article v-for="supplier in filteredSuppliers" :key="supplier.id" class="supplier-list-row supplier-list-item">
+                <strong>{{ supplier.name }}</strong>
+                <span>{{ supplier.contact }}</span>
+                <a
+                  :href="buildSupplierRestockMailto(supplier)"
+                  :title="`Envoyer une demande de réapprovisionnement à ${supplier.contact}`"
                 >
-                  Supprimer
-                </button>
-              </div>
-            </article>
+                  {{ supplier.email }}
+                </a>
+                <span class="supplier-usage">
+                  {{ getSupplierItemCount(supplier.id) }} article(s)
+                </span>
+                <div class="supplier-actions">
+                  <button type="button" class="btn btn-info btn-sm" @click="editSupplier(supplier)">
+                    Éditer
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn-danger btn-sm"
+                    @click="deleteSupplier(supplier)"
+                    :disabled="isSupplierUsed(supplier.id)"
+                    :title="isSupplierUsed(supplier.id) ? 'Suppression bloquée : fournisseur utilisé par des articles.' : 'Supprimer ce fournisseur'"
+                  >
+                    Supprimer
+                  </button>
+                </div>
+              </article>
+            </div>
           </div>
           <p v-else class="empty-state">Aucun fournisseur ne correspond à la recherche.</p>
         </div>
@@ -1328,6 +1620,14 @@ h2 {
   gap: 10px;
 }
 
+.supplier-list-scroll {
+  max-height: calc(5 * 78px + 12px);
+  overflow: auto;
+  display: grid;
+  gap: 10px;
+  padding-right: 4px;
+}
+
 .supplier-list-row {
   display: grid;
   grid-template-columns: minmax(140px, 1.4fr) minmax(120px, 1fr) minmax(190px, 1.2fr) minmax(110px, 0.7fr) minmax(170px, 1fr);
@@ -1417,6 +1717,20 @@ h2 {
   gap: 16px;
   align-items: end;
   margin-bottom: 14px;
+}
+
+.history-toolbar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+  gap: 16px;
+  align-items: end;
+  margin-bottom: 14px;
+}
+
+.history-toolbar-actions {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
 }
 
 .inventory-search {
@@ -1536,7 +1850,19 @@ select:focus {
 }
 
 .inventory-table-wrapper {
-  max-height: calc(25 * 52px + 58px);
+  max-height: calc(12 * 52px + 58px);
+  overflow: auto;
+  border-radius: 18px;
+}
+
+.history-table-wrapper {
+  max-height: calc(5 * 52px + 58px);
+  overflow: auto;
+  border-radius: 18px;
+}
+
+.restock-table-wrapper {
+  max-height: calc(8 * 52px + 58px);
   overflow: auto;
   border-radius: 18px;
 }
@@ -1650,7 +1976,8 @@ tbody tr:hover {
 @media (max-width: 1100px) {
   .summary-grid,
   .item-form,
-  .inventory-toolbar {
+  .inventory-toolbar,
+  .history-toolbar {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -1688,7 +2015,8 @@ tbody tr:hover {
 
   .summary-grid,
   .item-form,
-  .inventory-toolbar {
+  .inventory-toolbar,
+  .history-toolbar {
     grid-template-columns: 1fr;
   }
 
@@ -1727,6 +2055,7 @@ tbody tr:hover {
 
   .supplier-form-actions,
   .restock-actions,
+  .history-toolbar-actions,
   .supplier-actions,
   .use-action,
   .manage-actions {

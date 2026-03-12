@@ -8,6 +8,8 @@ import { Item } from './item/entities/item.entity';
 import { Supplier } from './suppliers/entities/supplier.entity';
 import { UsersModule } from './users/users.module';
 import { AuthModule } from './auth/auth.module';
+import { StockMovement } from './stock-movements/entities/stock-movement.entity';
+import { StockMovementsModule } from './stock-movements/stock-movements.module';
 
 @Module({
   imports: [
@@ -18,13 +20,14 @@ import { AuthModule } from './auth/auth.module';
       username: 'postgres',
       password: 'root',
       database: 'gestion_labo',
-      models: [Item, Supplier],
+      models: [Item, Supplier, StockMovement],
       autoLoadModels: true,
       synchronize: true,
       sync: { alter: true },
     }),
     ItemModule,
     SupplierModule,
+    StockMovementsModule,
     UsersModule,
     AuthModule,
   ],

@@ -5,10 +5,12 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
+import { Sequelize } from 'sequelize-typescript';
 import { Item } from './entities/item.entity';
 import { Supplier } from '../suppliers/entities/supplier.entity';
 import { CreateItemDto } from './dto/create-item.dto';
 import { UpdateItemDto } from './dto/update-item.dto';
+import { StockMovement } from '../stock-movements/entities/stock-movement.entity';
 
 type RestockReportItem = {
   id: number;
@@ -33,6 +35,9 @@ export class ItemService {
     private itemModel: typeof Item,
     @InjectModel(Supplier)
     private supplierModel: typeof Supplier,
+    @InjectModel(StockMovement)
+    private stockMovementModel: typeof StockMovement,
+    private sequelize: Sequelize,
   ) {}
 
   // --- CRUD ---
@@ -92,23 +97,50 @@ export class ItemService {
 
   // --- LOGIQUE MÉTIER LABO STOCK ALERT ---
   async decrement(id: number, amount: number): Promise<Item> {
-    const item = await this.findOne(id);
+    await this.sequelize.transaction(async (transaction) => {
+      const item = await this.itemModel.findByPk(id, {
+        include: [Supplier],
+        transaction,
+      });
 
-    const newQuantity = item.quantity - amount;
+      if (!item) {
+        throw new NotFoundException(`Consommable avec l'ID #${id} introuvable.`);
+      }
 
-    if (isNaN(newQuantity)) {
-      throw new BadRequestException(
-        'Erreur de calcul du stock : valeur non numérique.',
+      const newQuantity = item.quantity - amount;
+
+      if (isNaN(newQuantity)) {
+        throw new BadRequestException(
+          'Erreur de calcul du stock : valeur non numérique.',
+        );
+      }
+
+      if (newQuantity < 0) {
+        throw new BadRequestException(
+          `Stock insuffisant (actuel: ${item.quantity})`,
+        );
+      }
+
+      await item.update({ quantity: newQuantity }, { transaction });
+
+      await this.stockMovementModel.create(
+        {
+          movementType: 'usage',
+          itemId: item.id,
+          itemName: item.name,
+          itemInternalRef: item.internalRef ?? null,
+          supplierId: item.supplierId ?? null,
+          supplierName: item.supplier?.name ?? null,
+          supplierRef: item.supplierRef ?? null,
+          quantity: amount,
+          quantityBefore: item.quantity,
+          quantityAfter: newQuantity,
+          note: 'Utilisation enregistrée depuis le tableau de stock.',
+        },
+        { transaction },
       );
-    }
+    });
 
-    if (newQuantity < 0) {
-      throw new BadRequestException(
-        `Stock insuffisant (actuel: ${item.quantity})`,
-      );
-    }
-
-    await item.update({ quantity: newQuantity });
     return this.findOne(id);
   }
 }
