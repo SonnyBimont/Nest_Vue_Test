@@ -40,7 +40,7 @@ interface RestockReportItem {
 
 interface StockMovement {
   id: number
-  movementType: 'usage'
+  movementType: 'usage' | 'ajout'
   itemId: number | null
   itemName: string
   itemInternalRef: string | null
@@ -321,6 +321,10 @@ const formatDateTime = (value: string) =>
 const getMovementTypeLabel = (movementType: StockMovement['movementType']) => {
   if (movementType === 'usage') {
     return 'Utilisation'
+  }
+
+  if (movementType === 'ajout') {
+    return 'Ajout'
   }
 
   return movementType

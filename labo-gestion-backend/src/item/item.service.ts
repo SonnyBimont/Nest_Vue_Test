@@ -86,8 +86,54 @@ export class ItemService {
   }
 
   async update(id: number, updateItemDto: UpdateItemDto): Promise<Item> {
-    const item = await this.findOne(id);
-    return item.update({ ...updateItemDto });
+    await this.sequelize.transaction(async (transaction) => {
+      const item = await this.itemModel.findByPk(id, {
+        include: [Supplier],
+        transaction,
+      });
+
+      if (!item) {
+        throw new NotFoundException(`Consommable avec l'ID #${id} introuvable.`);
+      }
+
+      const quantityBefore = item.quantity;
+
+      await item.update({ ...updateItemDto }, { transaction });
+
+      const quantityAfter = item.quantity;
+
+      if (quantityAfter <= quantityBefore) {
+        return;
+      }
+
+      const updatedItem = await this.itemModel.findByPk(id, {
+        include: [Supplier],
+        transaction,
+      });
+
+      if (!updatedItem) {
+        throw new NotFoundException(`Consommable avec l'ID #${id} introuvable.`);
+      }
+
+      await this.stockMovementModel.create(
+        {
+          movementType: 'ajout',
+          itemId: updatedItem.id,
+          itemName: updatedItem.name,
+          itemInternalRef: updatedItem.internalRef ?? null,
+          supplierId: updatedItem.supplierId ?? null,
+          supplierName: updatedItem.supplier?.name ?? null,
+          supplierRef: updatedItem.supplierRef ?? null,
+          quantity: quantityAfter - quantityBefore,
+          quantityBefore,
+          quantityAfter,
+          note: 'Ajout de stock enregistré depuis la fiche article.',
+        },
+        { transaction },
+      );
+    });
+
+    return this.findOne(id);
   }
 
   async remove(id: number): Promise<void> {

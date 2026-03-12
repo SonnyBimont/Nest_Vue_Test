@@ -1,12 +1,12 @@
 import { Column, DataType, Model, Table } from 'sequelize-typescript';
 
-export const STOCK_MOVEMENT_TYPES = ['usage'] as const;
+export const STOCK_MOVEMENT_TYPES = ['usage', 'ajout'] as const;
 
 export type StockMovementType = (typeof STOCK_MOVEMENT_TYPES)[number];
 
 @Table
 export class StockMovement extends Model {
-  @Column({ type: DataType.ENUM(...STOCK_MOVEMENT_TYPES) })
+  @Column({ type: DataType.STRING })
   declare movementType: StockMovementType;
 
   @Column({ type: DataType.INTEGER, allowNull: true })
