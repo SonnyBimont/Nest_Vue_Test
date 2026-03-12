@@ -43,6 +43,6 @@ const handleLogin = async () => {
 
 <style scoped>
 .login-container { display: flex; justify-content: center; margin-top: 100px; }
-.login-form { background: #111111; padding: 2rem; border-radius: 8px; width: 300px; }
+.login-form { background: #5b7acf; padding: 2rem; border-radius: 8px; width: 300px; }
 .error { color: red; margin-top: 10px; }
 </style>

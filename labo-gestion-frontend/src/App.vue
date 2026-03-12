@@ -83,18 +83,26 @@ const getSupplierItemCount = (supplierId: number) =>
 
 const isSupplierUsed = (supplierId: number) => getSupplierItemCount(supplierId) > 0
 
-const suppliersByRecency = computed(() =>
-  [...suppliers.value].sort((leftSupplier, rightSupplier) => rightSupplier.id - leftSupplier.id),
+const suppliersByUsage = computed(() =>
+  [...suppliers.value].sort((leftSupplier, rightSupplier) => {
+    const usageDifference = getSupplierItemCount(rightSupplier.id) - getSupplierItemCount(leftSupplier.id)
+
+    if (usageDifference !== 0) {
+      return usageDifference
+    }
+
+    return leftSupplier.name.localeCompare(rightSupplier.name, 'fr')
+  }),
 )
 
 const filteredSuppliers = computed(() => {
   const searchTerm = supplierSearch.value.trim().toLocaleLowerCase('fr-FR')
 
   if (searchTerm.length === 0) {
-    return suppliersByRecency.value.slice(0, 3)
+    return suppliersByUsage.value.slice(0, 3)
   }
 
-  return suppliersByRecency.value.filter((supplier) =>
+  return suppliersByUsage.value.filter((supplier) =>
     [supplier.name, supplier.contact, supplier.email]
       .some((value) => value.toLocaleLowerCase('fr-FR').includes(searchTerm)),
   )
@@ -658,7 +666,7 @@ onUnmounted(() => {
     <section class="hero-panel">
       <div>
         <p class="eyebrow">Pilotage du stock labo</p>
-        <h1>Suivi Stock et réapprovisionnement</h1>
+        <h1>Suivi Stock et Réapprovisionnement</h1>
         <p class="hero-copy">
           Comparez le stock actuel au stock cible pour transmettre au magasin central les quantités à
           réapprovisionner par article.
@@ -897,7 +905,7 @@ onUnmounted(() => {
     >
       <div class="panel-heading">
         <div>
-          <p class="section-kicker">Paramétrage article</p>
+          <p class="section-kicker"> Articles </p>
           <h2>{{ editingId ? 'Modifier un article' : 'Ajouter un article' }}</h2>
         </div>
       </div>
@@ -1015,7 +1023,7 @@ onUnmounted(() => {
         <div class="suppliers-list-panel">
           <div class="suppliers-list-header">
             <span>{{ filteredSuppliers.length }} fournisseur(s) affiché(s)</span>
-            <span class="subtle-note">Les 3 derniers par défaut, ou tous les résultats via la recherche</span>
+            <span class="subtle-note">Les 3 fournisseurs les plus utilisés par défaut, ou tous les résultats via la recherche</span>
           </div>
 
           <div class="form-group supplier-search-group">
